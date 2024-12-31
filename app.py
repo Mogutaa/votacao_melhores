@@ -7,7 +7,7 @@ import os
 
 # Carregar variáveis de ambiente
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL="postgresql://site_votacao_user:haiIWOGWXC4oHIntT2XknlaDzslYl3Eo@dpg-ctpvfpq3esus73dlt020-a.oregon-postgres.render.com/site_votacao"
 
 # Função de conexão com o banco de dados
 def get_connection():
