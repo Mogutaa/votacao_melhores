@@ -2,13 +2,9 @@ import streamlit as st
 import psycopg2
 import pandas as pd
 import altair as alt
-from dotenv import load_dotenv
-import os
 
-# Load environment variables
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
+# URL de conexão direta ao banco de dados
+DATABASE_URL = "postgresql://site_votacao_user:haiIWOGWXC4oHIntT2XknlaDzslYl3Eo@dpg-ctpvfpq3esus73dlt020-a.oregon-postgres.render.com/site_votacao"
 
 # Database connection
 def get_connection():
@@ -33,7 +29,8 @@ def setup_database():
             CREATE TABLE IF NOT EXISTS competitors (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
-                category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE
+                category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+                UNIQUE(name, category_id)  -- Garante que o competidor seja único dentro da categoria
             );
         """)
         cursor.execute("""
@@ -69,14 +66,22 @@ def add_competitor(category_name, competitor_name):
             cursor.execute("SELECT id FROM categories WHERE name = %s", (category_name,))
             category = cursor.fetchone()
             if category:
+                # Verifica se o competidor já existe na categoria
                 cursor.execute("""
-                    INSERT INTO competitors (name, category_id)
-                    VALUES (%s, %s)
-                    RETURNING id;
+                    SELECT id FROM competitors WHERE name = %s AND category_id = %s
                 """, (competitor_name, category[0]))
-                competitor_id = cursor.fetchone()[0]
-                cursor.execute("INSERT INTO votes (competitor_id) VALUES (%s)", (competitor_id,))
-                conn.commit()
+                existing_competitor = cursor.fetchone()
+                if existing_competitor:
+                    st.warning(f"O competidor '{competitor_name}' já existe na categoria '{category_name}'.")
+                else:
+                    cursor.execute("""
+                        INSERT INTO competitors (name, category_id)
+                        VALUES (%s, %s) RETURNING id;
+                    """, (competitor_name, category[0]))
+                    competitor_id = cursor.fetchone()[0]
+                    cursor.execute("INSERT INTO votes (competitor_id) VALUES (%s)", (competitor_id,))
+                    conn.commit()
+                    st.sidebar.success(f"Competidor '{competitor_name}' adicionado à categoria '{category_name}'!")
             cursor.close()
             conn.close()
 
@@ -132,6 +137,60 @@ def get_results(query, params=None):
 # Streamlit App
 st.set_page_config(page_title="Melhores do Ano - Votação", layout="wide")
 
+# Custom styling for a cleaner design
+st.markdown("""
+    <style>
+        body {
+            background-color: #f9f9f9;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        }
+        .sidebar .sidebar-content {
+            background-color: #4CAF50;
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+        }
+        .stButton > button {
+            background-color: #FF9800;
+            color: white;
+            font-size: 16px;
+            border-radius: 8px;
+            padding: 12px 24px;
+            box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s ease-in-out;
+        }
+        .stButton > button:hover {
+            background-color: #FF5722;
+        }
+        .stTextInput input, .stSelectbox select {
+            font-size: 16px;
+            padding: 10px;
+            border-radius: 8px;
+            background-color: #fff;
+            border: 2px solid #ddd;
+            box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .stTextInput input:focus, .stSelectbox select:focus {
+            border-color: #FF9800;
+            outline: none;
+        }
+        .stRadio > div > label {
+            font-weight: bold;
+            color: #333;
+        }
+        .stTable th {
+            background-color: #FF9800;
+            color: white;
+            font-weight: bold;
+            border-radius: 10px;
+        }
+        .stTable td {
+            background-color: #f9f9f9;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# Page header
 st.title("🏆 Melhores do Ano - Votação")
 st.write("Vote nos seus favoritos! Adicione categorias e competidores para começar.")
 
@@ -194,10 +253,11 @@ elif action == "Resultados":
             st.subheader(f"Resultados - {selected_category}")
             results_df = pd.DataFrame(results, columns=["Competidor", "Votos"])
             chart = alt.Chart(results_df).mark_bar().encode(
-                x="Competidor",
-                y="Votos",
-                color="Competidor"
-            )
+                x=alt.X('Competidor', sort='-y'),
+                y='Votos',
+                color='Competidor',
+                tooltip=['Competidor', 'Votos']
+            ).interactive()  # Habilita zoom e pan
             st.altair_chart(chart, use_container_width=True)
         else:
             st.sidebar.info("Sem resultados disponíveis para esta categoria.")
@@ -206,13 +266,14 @@ elif action == "Resultados":
 categories = [row[0] for row in get_results("SELECT name FROM categories")]
 if categories:
     for category in categories:
-        st.subheader(f"Categoria: {category}")
-        competitors = [row[0] for row in get_results("""
-            SELECT name FROM competitors WHERE category_id = (SELECT id FROM categories WHERE name = %s)
-        """, (category,))]
-        for competitor in competitors:
-            if st.button(f"Votar em {competitor}", key=f"{category}_{competitor}"):
-                vote(category, competitor)
-                st.success(f"Voto computado para '{competitor}' na categoria '{category}'!")
+        st.subheader(f"Votação - {category}")
+        competitors = [row[0] for row in get_results("SELECT name FROM competitors WHERE category_id = (SELECT id FROM categories WHERE name = %s)", (category,))]
+        if competitors:
+            selected_competitor = st.radio(f"Escolha seu favorito em {category}:", competitors, key=category)
+            if st.button(f"Votar em {selected_competitor}"):
+                vote(category, selected_competitor)
+                st.success(f"Seu voto foi registrado para '{selected_competitor}'!")
+        else:
+            st.warning(f"Nenhum competidor encontrado na categoria '{category}'.")
 else:
-    st.info("Adicione categorias e competidores na barra lateral para começar a votação.")
+    st.warning("Adicione categorias para começar a votação!")
